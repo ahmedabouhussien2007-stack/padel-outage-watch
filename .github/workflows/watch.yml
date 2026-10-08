@@ -1,0 +1,177 @@
+name: Watch the website
+
+# Plan B for a day the Royal Padel Academy website is down.
+#
+# Every 5 minutes: ask the site if it is healthy (/healthz also tests its
+# database). While it is, keep a fresh encrypted copy of the schedule (refreshed
+# when it is older than 25 minutes). If the site stays unreachable for about 4
+# minutes in a row, email each person their own schedule from that copy, ONCE per
+# outage; when it answers again, send one short "working again" email.
+#
+# It lives in its own public repository only because public repositories get
+# unlimited free Actions minutes and this runs all day. It holds no data: the
+# schedule copy is encrypted in the Actions cache (not in the repository), every
+# setting is a secret, and the script never prints an address or schedule text.
+# GitHub may delay scheduled runs by several minutes, so expect an email within
+# roughly 5-15 minutes of an outage starting.
+#
+# Dry run (nobody but you is emailed): Actions -> Watch the website -> Run workflow,
+# choose "down" or "back" and give your own address.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      pretend:
+        description: 'Testing: send the "down" or "back" email without waiting for a real outage'
+        type: choice
+        options: ['none', 'down', 'back']
+        default: 'none'
+      test_recipient:
+        description: 'Testing: the ONLY address to email (required when pretending)'
+        required: false
+        default: ''
+
+concurrency:
+  group: watch
+  cancel-in-progress: false
+
+permissions:
+  contents: write      # the "outage announced" tag and the monthly keep-alive commit
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SITE_URL: ${{ vars.SITE_URL || 'https://padel-academy.vercel.app' }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      SNAPSHOT_PASSPHRASE: ${{ secrets.SNAPSHOT_PASSPHRASE }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      PRETEND: ${{ inputs.pretend || 'none' }}
+      TEST_RECIPIENT: ${{ inputs.test_recipient || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is the site up? (up to 8 tries over about 4 minutes)
+        id: check
+        run: |
+          # Keep a dry-run address out of this public log.
+          [ -z "$TEST_RECIPIENT" ] || echo "::add-mask::$TEST_RECIPIENT"
+          if [ "$PRETEND" != "none" ]; then
+            test -n "$TEST_RECIPIENT" || { echo "::error::Give test_recipient when pretending."; exit 1; }
+            echo "up=pretend" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          [ -z "$TEST_RECIPIENT" ] || { echo "::error::test_recipient is only for a dry run: choose pretend 'down' or 'back'."; exit 1; }
+          # DOWN means: no answer at all (000), the site is gone (404) or it errors (5xx). Any other
+          # answer (including a 401/403/429 from a firewall) is not evidence of an outage.
+          for i in 1 2 3 4 5 6 7 8; do
+            code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' "$SITE_URL/healthz" || true)
+            code=${code:-000}
+            if [ "$code" != "000" ] && [ "$code" != "404" ] && [ "$code" -lt 500 ]; then
+              [ "$code" = "200" ] || echo "::warning::The site answered HTTP $code, which is not an outage but not a clean 200 either."
+              echo "up=yes" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            echo "try $i: HTTP $code"
+            [ "$i" = 8 ] || sleep 30
+          done
+          echo "up=no" >> "$GITHUB_OUTPUT"
+
+      - name: Has this outage already been announced?
+        id: state
+        run: |
+          # exit 0 = the tag exists, 2 = it does not; anything else is a network hiccup, so
+          # fail this run and let the next one decide rather than guess.
+          rc=0; git ls-remote --exit-code --tags origin refs/tags/outage-announced > /dev/null 2>&1 || rc=$?
+          case "$rc" in
+            0) echo "announced=yes" >> "$GITHUB_OUTPUT" ;;
+            2) echo "announced=no" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Could not read the tags (git exit $rc)."; exit 1 ;;
+          esac
+
+      - name: Get the latest saved schedule copy
+        id: saved
+        uses: actions/cache/restore@v4
+        with:
+          path: snapshot.enc
+          key: snapshot-none
+          restore-keys: snapshot-
+
+      - name: Refresh the schedule copy (site up, copy older than 25 minutes)
+        id: refresh
+        if: steps.check.outputs.up == 'yes'
+        # A problem refreshing the copy must never stop the recovery email below.
+        continue-on-error: true
+        run: |
+          if [ -z "$CRON_SECRET" ] || [ -z "$SNAPSHOT_PASSPHRASE" ]; then
+            echo "::warning::CRON_SECRET / SNAPSHOT_PASSPHRASE are not set, so no schedule copy is being kept."; exit 0
+          fi
+          saved_key="${{ steps.saved.outputs.cache-matched-key }}"
+          now=$(date +%s)
+          if [ -n "$saved_key" ] && [ $((now - ${saved_key#snapshot-})) -lt 1500 ]; then
+            echo "The saved copy is recent enough."; exit 0
+          fi
+          code=$(curl -s -m 30 -o snapshot.json -w '%{http_code}' -H "Authorization: Bearer $CRON_SECRET" "$SITE_URL/cron/schedule-snapshot" || true)
+          if [ "$code" != "200" ]; then echo "::warning::The site answered $code to the schedule request; keeping the older copy."; rm -f snapshot.json; exit 0; fi
+          python3 -c "import json; d=json.load(open('snapshot.json')); assert isinstance(d['messages'], list)"
+          rm -f snapshot.enc
+          openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass env:SNAPSHOT_PASSPHRASE -in snapshot.json -out snapshot.enc
+          rm -f snapshot.json
+          echo "key=snapshot-$now" >> "$GITHUB_OUTPUT"
+          echo "refreshed=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Save the new schedule copy
+        if: steps.refresh.outputs.refreshed == 'yes'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: snapshot.enc
+          key: ${{ steps.refresh.outputs.key }}
+
+      - name: Email the schedule (outage, or a dry run)
+        if: (steps.check.outputs.up == 'no' && steps.state.outputs.announced == 'no') || (steps.check.outputs.up == 'pretend' && env.PRETEND == 'down')
+        run: |
+          test -f snapshot.enc || { echo "::error::No saved schedule copy exists yet, so there is nothing to send."; exit 1; }
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:SNAPSHOT_PASSPHRASE -in snapshot.enc -out snapshot.json
+          python3 outage_mail.py down snapshot.json ${TEST_RECIPIENT:+--to "$TEST_RECIPIENT"}
+          rm -f snapshot.json
+          if [ "$PRETEND" = "none" ]; then
+            git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag outage-announced && git push origin outage-announced
+          fi
+
+      # A site that flaps would otherwise get "down", "working again", "down" ... Only say
+      # "working again" if it is still answering a minute later.
+      - name: Make sure it is really back
+        id: confirm
+        if: steps.check.outputs.up == 'yes' && steps.state.outputs.announced == 'yes'
+        run: |
+          sleep 60
+          code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' "$SITE_URL/healthz" || true)
+          code=${code:-000}
+          if [ "$code" != "000" ] && [ "$code" != "404" ] && [ "$code" -lt 500 ]; then echo "back=yes" >> "$GITHUB_OUTPUT"; else echo "back=no" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Email "working again" (recovery, or a dry run)
+        if: steps.confirm.outputs.back == 'yes' || (steps.check.outputs.up == 'pretend' && env.PRETEND == 'back')
+        run: |
+          test -f snapshot.enc || { echo "::error::No saved schedule copy to take the recipients from."; exit 1; }
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:SNAPSHOT_PASSPHRASE -in snapshot.enc -out snapshot.json
+          python3 outage_mail.py back snapshot.json ${TEST_RECIPIENT:+--to "$TEST_RECIPIENT"}
+          rm -f snapshot.json
+          if [ "$PRETEND" = "none" ]; then git push origin :refs/tags/outage-announced; fi
+
+      # GitHub switches scheduled workflows off in a public repository after 60
+      # days with no commits; one empty commit a month keeps this one running.
+      - name: Keep the schedule alive
+        if: steps.check.outputs.up == 'yes'
+        run: |
+          last=$(git log -1 --format=%ct)
+          if [ $(( $(date +%s) - last )) -gt 2592000 ]; then
+            git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -q -m "keep the schedule alive" && git push origin HEAD:main
+          fi
