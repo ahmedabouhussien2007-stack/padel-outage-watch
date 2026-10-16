@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      SITE_URL: ${{ vars.SITE_URL || 'https://padel-academy.vercel.app' }}
+      SITE_URL: ${{ vars.SITE_URL || 'https://royalpadelacademy.com' }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       SNAPSHOT_PASSPHRASE: ${{ secrets.SNAPSHOT_PASSPHRASE }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}

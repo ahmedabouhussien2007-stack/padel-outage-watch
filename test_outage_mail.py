@@ -81,6 +81,11 @@ class OutageMailTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), 'down: sent 1, failed 1')
 
+    def test_replies_go_to_the_academy_inbox(self):
+        FakeSMTP.instances = []
+        om.send_all([('a@example.com', 'S', 'B')], ENV, FakeSMTP, lambda s: None)
+        self.assertEqual(FakeSMTP.instances[0].sent[0]['Reply-To'], 'royalpadelacademy@gmail.com')
+
     def test_a_failed_send_gets_one_more_try(self):
         calls = {'n': 0}
         real = FakeSMTP.send_message
@@ -119,7 +124,7 @@ class OutageMailTests(unittest.TestCase):
         self.assertEqual(sent[0]['Subject'], 'Website working again — check your schedule')
         body = sent[0].get_content()
         self.assertIn('your schedule on it is up to date', body)
-        self.assertIn('https://padel-academy.vercel.app/login', body)   # the default address
+        self.assertIn('https://royalpadelacademy.com/login', body)   # the default address
         self.assertNotIn('TODAY', body)
 
     def test_back_links_to_the_site_address_in_use(self):

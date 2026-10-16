@@ -30,7 +30,9 @@ DOWN_INTRO = (
 DOWN_OUTRO = "\n--\nSent automatically because the website stayed unreachable for several minutes. You will get one short email when it is working again.\n"
 BACK_BODY = ("The Royal Padel Academy website is working again, and your schedule on it is up to date.\n\n"
              "Go to the website to check your sessions:\n{site}/login\n\n--\nSent automatically.\n")
-DEFAULT_SITE = 'https://padel-academy.vercel.app'
+DEFAULT_SITE = 'https://royalpadelacademy.com'
+# Nobody reads the sending address; a reply goes to the academy inbox instead.
+REPLY_TO = 'royalpadelacademy@gmail.com'
 
 
 def load_snapshot(path):
@@ -87,6 +89,7 @@ def send_all(emails, env=os.environ, smtp_class=smtplib.SMTP, sleep=time.sleep):
                 try:
                     message = EmailMessage()
                     message['From'], message['To'], message['Subject'] = sender, to, subject
+                    message['Reply-To'] = REPLY_TO
                     message.set_content(body)
                     smtp.send_message(message)
                     sent += 1
