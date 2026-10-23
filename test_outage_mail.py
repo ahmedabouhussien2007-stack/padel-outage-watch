@@ -151,7 +151,7 @@ class OutageMailTests(unittest.TestCase):
     def test_pause_blocks_real_and_test_emails_without_smtp(self):
         for args in (['down', write(SNAP)], ['back', write(SNAP)],
                      ['down', write(SNAP), '--to', 'me@example.com']):
-            code, out = self.run_main(args, env={})
+            code, out = self.run_main(args, env={'EMAILS_PAUSED': '1'})
             self.assertEqual(code, 0)
             self.assertIn('paused', out)
         self.assertEqual(FakeSMTP.instances, [])

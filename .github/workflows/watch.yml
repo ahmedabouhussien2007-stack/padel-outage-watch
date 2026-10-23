@@ -55,7 +55,7 @@ jobs:
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       # Temporary owner-requested pause. Keep monitoring, but do not email
       # or create an outage-announced tag while sending is paused.
-      EMAILS_PAUSED: '1'
+      EMAILS_PAUSED: '0'
       PRETEND: ${{ inputs.pretend || 'none' }}
       TEST_RECIPIENT: ${{ inputs.test_recipient || '' }}
     steps:

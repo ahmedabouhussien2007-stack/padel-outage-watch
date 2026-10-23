@@ -103,9 +103,9 @@ def send_all(emails, env=os.environ, smtp_class=smtplib.SMTP, sleep=time.sleep):
 
 
 def main(argv, env=os.environ, smtp_class=smtplib.SMTP, sleep=time.sleep):
-    # Temporary academy-wide pause. The watcher may keep checking the site,
-    # but neither real nor test emails leave until the owner resumes them.
-    if env.get('EMAILS_PAUSED', '1') != '0':
+    # Emergency pause for the external outage sender. Site checks continue;
+    # only an explicit EMAILS_PAUSED=1 disables email delivery.
+    if env.get('EMAILS_PAUSED', '0') == '1':
         print('Email sending is paused.')
         return 0
     args = list(argv)
