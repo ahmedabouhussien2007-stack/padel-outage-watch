@@ -53,6 +53,9 @@ jobs:
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      # Temporary owner-requested pause. Keep monitoring, but do not email
+      # or create an outage-announced tag while sending is paused.
+      EMAILS_PAUSED: '1'
       PRETEND: ${{ inputs.pretend || 'none' }}
       TEST_RECIPIENT: ${{ inputs.test_recipient || '' }}
     steps:
@@ -134,7 +137,7 @@ jobs:
           key: ${{ steps.refresh.outputs.key }}
 
       - name: Email the schedule (outage, or a dry run)
-        if: (steps.check.outputs.up == 'no' && steps.state.outputs.announced == 'no') || (steps.check.outputs.up == 'pretend' && env.PRETEND == 'down')
+        if: env.EMAILS_PAUSED != '1' && ((steps.check.outputs.up == 'no' && steps.state.outputs.announced == 'no') || (steps.check.outputs.up == 'pretend' && env.PRETEND == 'down'))
         run: |
           test -f snapshot.enc || { echo "::error::No saved schedule copy exists yet, so there is nothing to send."; exit 1; }
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:SNAPSHOT_PASSPHRASE -in snapshot.enc -out snapshot.json
@@ -157,7 +160,7 @@ jobs:
           if [ "$code" != "000" ] && [ "$code" != "404" ] && [ "$code" -lt 500 ]; then echo "back=yes" >> "$GITHUB_OUTPUT"; else echo "back=no" >> "$GITHUB_OUTPUT"; fi
 
       - name: Email "working again" (recovery, or a dry run)
-        if: steps.confirm.outputs.back == 'yes' || (steps.check.outputs.up == 'pretend' && env.PRETEND == 'back')
+        if: env.EMAILS_PAUSED != '1' && (steps.confirm.outputs.back == 'yes' || (steps.check.outputs.up == 'pretend' && env.PRETEND == 'back'))
         run: |
           test -f snapshot.enc || { echo "::error::No saved schedule copy to take the recipients from."; exit 1; }
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass env:SNAPSHOT_PASSPHRASE -in snapshot.enc -out snapshot.json

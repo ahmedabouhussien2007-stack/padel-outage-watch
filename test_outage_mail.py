@@ -12,7 +12,7 @@ SNAP = {'generated_at': '2026-10-04 09:05', 'messages': [
     {'to': 'boss@example.com', 'subject': 'Schedule for Sun, Oct 4 — 2 sessions today', 'body': 'TODAY — everything\n'},
     {'to': 'coach@example.com', 'subject': 'Your schedule for Sun, Oct 4 — 1 session today', 'body': 'TODAY — only mine\n'},
 ]}
-ENV = {'SMTP_HOST': 'smtp.example.com', 'SMTP_PORT': '587', 'SMTP_USER': 'u', 'SMTP_PASSWORD': 'p', 'EMAIL_FROM': 'Royal Padel <no-reply@example.com>'}
+ENV = {'SMTP_HOST': 'smtp.example.com', 'SMTP_PORT': '587', 'SMTP_USER': 'u', 'SMTP_PASSWORD': 'p', 'EMAIL_FROM': 'Royal Padel <no-reply@example.com>', 'EMAILS_PAUSED': '0'}
 
 
 class FakeSMTP:
@@ -146,7 +146,15 @@ class OutageMailTests(unittest.TestCase):
 
     def test_missing_smtp_settings_fail_loudly(self):
         with self.assertRaises(RuntimeError):
-            self.run_main(['down', write(SNAP)], env={})
+            self.run_main(['down', write(SNAP)], env={'EMAILS_PAUSED': '0'})
+
+    def test_pause_blocks_real_and_test_emails_without_smtp(self):
+        for args in (['down', write(SNAP)], ['back', write(SNAP)],
+                     ['down', write(SNAP), '--to', 'me@example.com']):
+            code, out = self.run_main(args, env={})
+            self.assertEqual(code, 0)
+            self.assertIn('paused', out)
+        self.assertEqual(FakeSMTP.instances, [])
 
     def test_a_malformed_snapshot_is_rejected(self):
         for bad in ({'messages': 'nope'}, {'messages': [{'to': 'a@b.c', 'subject': 's'}]}):
